@@ -205,13 +205,17 @@ const LAYOUT = [
     {t:'desk', n:2},   // row4
   ]},
 ];
-// 문: 학생기준 맨 오른쪽(secR 바깥) row3 위치
-// 관리자 기준으로는 맨 왼쪽(secL 바깥) row1 위치 (행 역순: 5줄중 row3→역순 row1)
+// 문 위치:
+// 관리자뷰: secR 바깥 오른쪽, row3(김지훈 줄) → DOOR_ROWS 역순 표시이므로 DOOR_ROWS[1]=door
+// 학생뷰:  secL 바깥 왼쪽, row1 → DOOR_ROWS 정순 표시이므로 DOOR_ROWS[1]=door
+// DOOR_ROWS 표시순서:
+// 관리자뷰(역순): index [4][3][2][1][0] → 관리자 row3(2번째줄)=DOOR_ROWS[1]=door
+// 학생뷰(정순):   index [0][1][2][3][4] → 학생 row1(2번째줄)=DOOR_ROWS[1]=door
 const DOOR_ROWS = [
   {t:'ghost'},
-  {t:'ghost'},
-  {t:'ghost'},
   {t:'door',txt:'🚪\n문'},
+  {t:'ghost'},
+  {t:'ghost'},
   {t:'ghost'},
 ];
 
@@ -522,7 +526,7 @@ function buildChartHTML() {
   const back  = `<div class="back-bar">\ub4a4 \ucabd</div>`;
 
   let sectionsHTML = `<div class="sections-row">`;
-  if (isAdmin) sectionsHTML += buildDoorCol(); // 관리자: 맨 왼쪽
+  if (!isAdmin) sectionsHTML += buildDoorCol(); // 학생: 맨 왼쪽(앞에 추가 아니라 뒤)
 
   secs.forEach(sec => {
     const rowCount = sec.rows.length;
@@ -575,7 +579,7 @@ function buildChartHTML() {
     sectionsHTML += `<div class="section">${rowsHTML}</div>`;
   });
 
-  if (!isAdmin) sectionsHTML += buildDoorCol(); // 학생: 맨 오른쪽
+  if (isAdmin) sectionsHTML += buildDoorCol(); // 관리자: 맨 오른쪽
   sectionsHTML += `</div>`;
 
   return `<div class="chart-outer">
