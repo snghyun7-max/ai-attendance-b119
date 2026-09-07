@@ -184,11 +184,11 @@ input,select,textarea{border:1.5px solid #c5d2e0;border-radius:7px;padding:7px 1
 // 칠판 (아래)
 const LAYOUT = [
   { id:'secL', rows:[
-    {t:'desk', n:3},                  // row0: 3칸
-    {t:'desk', n:3},                  // row1: 3칸
-    {t:'rpartial', desk:2, ghost:1},  // row2: 2칸+오른쪽ghost(벽)
-    {t:'rpartial', desk:2, ghost:1},  // row3: 2칸+오른쪽ghost(벽)
-    {t:'ghost', n:0},                 // row4: 없음
+    {t:'desk', n:3},                   // row0: 3칸
+    {t:'desk', n:3},                   // row1: 3칸
+    {t:'partial', ghost:1, desk:2},    // row2: ghost(중앙쪽)+2칸(벽쪽)
+    {t:'partial', ghost:1, desk:2},    // row3: ghost(중앙쪽)+2칸(벽쪽)
+    {t:'ghost', n:0},                  // row4: 없음
   ]},
   { id:'secC', rows:[
     {t:'desk', n:4},   // row0
@@ -205,7 +205,8 @@ const LAYOUT = [
     {t:'desk', n:2},   // row4
   ]},
 ];
-// 문: 학생기준 맨 왼쪽(secL 바깥) row3 위치
+// 문: 학생기준 맨 오른쪽(secR 바깥) row3 위치
+// 관리자 기준으로는 맨 왼쪽(secL 바깥) row1 위치 (행 역순: 5줄중 row3→역순 row1)
 const DOOR_ROWS = [
   {t:'ghost'},
   {t:'ghost'},
@@ -521,8 +522,7 @@ function buildChartHTML() {
   const back  = `<div class="back-bar">\ub4a4 \ucabd</div>`;
 
   let sectionsHTML = `<div class="sections-row">`;
-  if (isAdmin) sectionsHTML += buildDoorCol();
-  else sectionsHTML += buildDoorCol(); // 학생: 왼쪽에 문
+  if (isAdmin) sectionsHTML += buildDoorCol(); // 관리자: 맨 왼쪽
 
   secs.forEach(sec => {
     const rowCount = sec.rows.length;
@@ -575,6 +575,7 @@ function buildChartHTML() {
     sectionsHTML += `<div class="section">${rowsHTML}</div>`;
   });
 
+  if (!isAdmin) sectionsHTML += buildDoorCol(); // 학생: 맨 오른쪽
   sectionsHTML += `</div>`;
 
   return `<div class="chart-outer">
