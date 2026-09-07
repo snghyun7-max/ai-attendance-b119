@@ -119,6 +119,13 @@ input,select,textarea{border:1.5px solid #c5d2e0;border-radius:7px;padding:7px 1
 .modal{background:#fff;border-radius:12px;padding:22px;max-width:440px;width:92%;max-height:80vh;overflow-y:auto;box-shadow:0 6px 28px rgba(0,0,0,.18)}
 .modal h3{color:#4a90d9;margin-bottom:10px}
 .modal-btns{display:flex;gap:8px;margin-top:13px;justify-content:flex-end}
+.excuse-card{background:#fff8ee;border:2px dashed #e0a040;border-radius:12px;padding:14px 18px;margin-bottom:12px}
+.excuse-card h3{font-size:13px;font-weight:700;color:#a06010;margin-bottom:10px}
+.excuse-drop{min-height:52px;background:#fff3dc;border:2px dashed #d4902a;border-radius:9px;padding:10px 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;transition:background .15s}
+.excuse-drop.dragover{background:#ffe8b0}
+.excuse-chip{background:#f5c842;color:#5a3800;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:6px;cursor:grab}
+.excuse-chip .rm{cursor:pointer;font-size:14px;color:#8b5a00;font-weight:900}
+.excuse-placeholder{color:#c09040;font-size:12px;font-style:italic}
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
@@ -138,8 +145,8 @@ input,select,textarea{border:1.5px solid #c5d2e0;border-radius:7px;padding:7px 1
   <div></div>
 </div>
 
-<!-- ★ 상단 모드 전환 스위치 ★ -->
-<div id="mode-switch-bar">
+<!-- ★ 상단 모드 전환 스위치 ★ (관리자 URL만 표시) -->
+<div id="mode-switch-bar" style="display:none">
   <span>화면 전환:</span>
   <div id="mode-toggle">
     <button class="active" id="btn-student" onclick="switchMode('student',this)">🎓 학생 화면</button>
@@ -210,7 +217,7 @@ const DOOR_ROWS = [
 // 명단은 관리자 화면에서 엑셀 업로드로 추가하세요
 let students = [];
 
-let seats={}, myName=null, isAdmin=false, closed=false, dragName=null, selectedSrc=null;
+let seats={}, excused=new Set(), myName=null, isAdmin=false, closed=false, dragName=null, selectedSrc=null;
 
 // ── Firebase 연동 ──
 const firebaseConfig = {
@@ -225,15 +232,19 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
-// URL 파라미터로 세션 구분 (없으면 'default')
 const urlParams = new URLSearchParams(window.location.search);
 const sessionId = urlParams.get('session') || 'default';
 const sessionRef = db.ref('sessions/' + sessionId);
+const rosterRef  = db.ref('roster_b119');
 
-// URL 파라미터로 자동 뷰 전환
-const viewParam = urlParams.get('view');   // 'student' 또는 'admin'
-const keyParam  = urlParams.get('key');    // 관리자 비밀번호 base64
-const ADMIN_KEY_B64 = btoa('1111');        // MTExMQ==
+// localStorage로 기기 이름 복원
+const LS_KEY = 'ai-b119-name-' + sessionId;
+const _savedName = localStorage.getItem(LS_KEY);
+if (_savedName) myName = _savedName;
+
+const viewParam = urlParams.get('view');
+const keyParam  = urlParams.get('key');
+const ADMIN_KEY_B64 = btoa('1111');
 
 if (viewParam === 'admin' && keyParam === ADMIN_KEY_B64) {
   isAdmin = true;
@@ -241,25 +252,53 @@ if (viewParam === 'admin' && keyParam === ADMIN_KEY_B64) {
   isAdmin = false;
 }
 
-let _remoteUpdating = false; // 원격 업데이트 중 무한루프 방지
+let _remoteUpdating = false;
+let _gotRoster = false, _gotSession = false, _rendered = false;
 
-// 원격 변경 수신 → 로컬 상태 갱신 후 화면 다시 그림
-sessionRef.on('value', (snap) => {
+// roster (전역 명단) 수신
+rosterRef.on('value', (snap) => {
   const data = snap.val();
-  if (!data) return;
-  _remoteUpdating = true;
-  if (data.seats) seats = data.seats;
-  if (data.students) students = data.students;
-  if (typeof data.closed === 'boolean') closed = data.closed;
-  document.getElementById('closed-banner').style.display = closed ? 'block' : 'none';
-  renderAll();
-  _remoteUpdating = false;
+  if (data && data.students && data.students.length > 0) students = data.students;
+  _gotRoster = true;
+  _safeRender();
 });
 
-// 로컬 변경 → Firebase로 전송
+// 세션 (좌석/마감) 수신
+sessionRef.on('value', (snap) => {
+  _remoteUpdating = true;
+  const data = snap.val();
+  if (data) {
+    if (data.seats) seats = data.seats;
+    if (data.excused) excused = new Set(data.excused);
+    if (typeof data.closed === 'boolean') closed = data.closed;
+  }
+  _gotSession = true;
+  _remoteUpdating = false;
+  _safeRender();
+});
+
+function _safeRender() {
+  if (!_gotRoster || !_gotSession) return;
+  _rendered = true;
+  document.getElementById('closed-banner').style.display = closed ? 'block' : 'none';
+  renderAll();
+}
+
+// 안전망: 3초 후에도 안 그려지면 강제 렌더
+setTimeout(() => {
+  if (!_rendered) {
+    _gotRoster = true; _gotSession = true; _rendered = true;
+    document.getElementById('closed-banner').style.display = closed ? 'block' : 'none';
+    renderAll();
+  }
+}, 3000);
+
 function pushToFirebase(){
   if (_remoteUpdating) return;
-  sessionRef.set({ seats, students, closed });
+  sessionRef.set({ seats, excused:[...excused], closed });
+}
+function pushRoster(){
+  rosterRef.set({ students, updatedAt: sessionId });
 }
 
 // ── 모드 전환 ──
@@ -279,6 +318,18 @@ function switchMode(mode, btn) {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  const modeSwitchBar = document.getElementById('mode-switch-bar');
+  const modeBadge = document.getElementById('mode-badge');
+  if (isAdmin) {
+    if (modeSwitchBar) modeSwitchBar.style.display = 'flex';
+    if (modeBadge) { modeBadge.className = 'badge badge-admin'; modeBadge.textContent = '👨‍🏫 관리자'; }
+    const btnAdmin = document.getElementById('btn-admin');
+    const btnStudent = document.getElementById('btn-student');
+    if (btnAdmin) btnAdmin.classList.add('active');
+    if (btnStudent) btnStudent.classList.remove('active');
+  } else {
+    if (modeSwitchBar) modeSwitchBar.style.display = 'none';
+  }
   // B119 16회차 세션 맵
   const SESSION_MAP = {
     'w1_0907':  {n:1,  date:'2026-09-07', day:'월'},
@@ -312,7 +363,7 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-student').classList.remove('active');
     document.getElementById('btn-admin').classList.add('active');
   }
-  renderAll();
+  // Firebase _safeRender에서 renderAll 호출
 });
 
 // ── 전체 렌더 ──
@@ -331,7 +382,8 @@ function renderAll() {
           <h3>현황</h3>
           <div class="stat-row"><span>전체</span><span class="stat-num c-blue">${names.length}</span></div>
           <div class="stat-row"><span>착석</span><span class="stat-num c-green">${cnt}</span></div>
-          <div class="stat-row"><span>미착석</span><span class="stat-num c-red">${names.length-cnt}</span></div>
+          <div class="stat-row"><span>결석인정</span><span class="stat-num" style="color:#d4902a">${excused.size}</span></div>
+          <div class="stat-row"><span>미착석</span><span class="stat-num c-red">${names.length-cnt-excused.size}</span></div>
           <div id="prog-bg"><div id="prog-fill" style="width:${pct}%"></div></div>
           <div id="prog-txt">${pct}%</div>
         </div>
@@ -342,16 +394,21 @@ function renderAll() {
       </div>
       <div id="chart-area" style="flex:1;min-width:0;display:flex;flex-direction:column;gap:10px">
         ${!isAdmin ? `<div class="student-guide">
-          ① 내 이름 선택 → 확인 클릭 → 빈 자리 클릭하면 착석!
+          ① 왼쪽 명단에서 내 이름 드래그 → 빈 자리에 놓기
           &nbsp;&nbsp;|&nbsp;&nbsp;
           ② 내 자리(파란색) 클릭 → 다른 빈 자리 클릭하면 이동
           &nbsp;&nbsp;|&nbsp;&nbsp;
           ③ 1인 1좌석만 가능
+          &nbsp;&nbsp;|&nbsp;&nbsp;
+          ④ 사유 결석자는 아래 <b>결석인정</b> 칸에 내 이름 드래그
         </div>` : ''}
         <div id="chart-wrap">${buildChartHTML()}</div>
       </div>
     </div>
     ${isAdmin ? absentHTML(n2s) : ''}
+  </div>
+  <div id="excuse-section" style="margin:12px 16px 0;max-width:1700px;margin-left:auto;margin-right:auto;padding:0 16px">
+    ${buildExcuseHTML(n2s)}
   </div>`;
 
   attachDrag();
@@ -368,15 +425,18 @@ function buildNameList(n2s) {
     const college = typeof s==='object'?s.college:'';
     const major = typeof s==='object'?s.major:'';
     const seated = !!n2s[nm];
+    const isExcused = excused.has(nm);
     const isMe = !isAdmin && nm === myName;
-    const canDrag = !closed && (isAdmin || isMe);
+    const canDrag = !closed && !isExcused && !seated && (isAdmin || (!isAdmin && (!myName || nm === myName)));
     let cls = '';
-    if (seated) cls += ' seated';
-    if (isMe && !seated) cls += ' is-me';
+    if (seated || isExcused) cls += ' seated';
+    if (isMe && !seated && !isExcused) cls += ' is-me';
     if (canDrag) cls += ' can-drag';
     const sub = isAdmin && (college||major) ? `<span style="font-size:11px;color:#8a9ab0;margin-left:4px">(${[college,major].filter(Boolean).join('/')})</span>` : '';
+    const badge = isExcused ? '<span style="font-size:10px;background:#f5c842;color:#5a3800;border-radius:8px;padding:1px 6px;margin-left:4px">결석인정</span>' : '';
+    const adminReset = isAdmin && (seated || isExcused) ? `<button onclick="resetStudent('${nm}')" style="font-size:10px;padding:2px 6px;margin-left:6px;background:#f5e0e0;color:#902020;border:1px solid #e0a0a0;border-radius:4px;cursor:pointer">리셋</button>` : '';
     return `<li class="${cls.trim()}" data-name="${nm}">
-      <span>${nm}${sub}</span>${seated?'<span class="chk">✓</span>':''}
+      <span>${nm}${badge}${sub}</span>${seated&&!isExcused?'<span class="chk">✓</span>':''}${adminReset}
     </li>`;
   }).join('');
 }
@@ -385,7 +445,12 @@ function attachDrag() {
   document.querySelectorAll('#name-list li.can-drag').forEach(li => {
     li.draggable = true;
     li.addEventListener('dragstart', e => {
-      dragName = li.dataset.name; selectedSrc = null;
+      const nm = li.dataset.name;
+      if (!isAdmin) {
+        if (myName && myName !== nm) { e.preventDefault(); toast(`⚠️ "${myName}"으로 이미 선택됨`); return; }
+        myName = nm; localStorage.setItem(LS_KEY, nm);
+      }
+      dragName = nm; selectedSrc = null;
       e.dataTransfer.effectAllowed = 'move';
       li.classList.add('dragging');
     });
@@ -412,20 +477,22 @@ function attachDrag() {
 function adminBar() {
   if (closed) return `
     <strong style="color:#c05050">🔒 마감 완료</strong>
-    <button class="btn-green" onclick="exportCSV()">📥 CSV 저장</button>
-    <button class="btn-orange" onclick="reopenSession()">🔓 재개</button>`;
+    <button class="btn-green" onclick="exportCSV()">📥 이번 회차 CSV</button>
+    <button class="btn-green" onclick="exportAllCSV()">📊 전체 회차 CSV</button>
+    <button class="btn-orange" onclick="reopenSession()">🔓 수업 재개</button>`;
   return `
     <strong style="color:#4a90d9;font-size:12px">👨‍🏫 관리자</strong>
     <button class="btn-red" onclick="closeSession()">🔒 수업 마감</button>
     <button class="btn-orange" onclick="resetSeats()">🔄 전체 초기화</button>
     <button class="btn-gray" onclick="showRosterModal()">📝 명단 수정</button>
-    <button class="btn-green" onclick="exportCSV()">📥 CSV 저장</button>`;
+    <button class="btn-green" onclick="exportCSV()">📥 이번 회차 CSV</button>
+    <button class="btn-green" onclick="exportAllCSV()">📊 전체 회차 CSV</button>`;
 }
 
 function studentBar(n2s) {
   if (closed) return `<span style="color:#c05050;font-weight:700">🔒 수업이 마감되었습니다</span>`;
   const names = getNames();
-  const avail = names.filter(n => !n2s[n] || n === myName);
+  const avail = names.filter(n => (!n2s[n] && !excused.has(n)) || n === myName);
   return `
     <span style="font-size:15px;color:#4a90d9;font-weight:800;white-space:nowrap">👤 내 이름 선택</span>
     <select id="name-dd" style="min-width:135px;font-size:14px;font-weight:700">
@@ -543,6 +610,7 @@ function ol(e){e.currentTarget.classList.remove('dragover');}
 function od(e,sid){
   e.preventDefault();e.currentTarget.classList.remove('dragover');
   if(!dragName||closed)return;
+  excused.delete(dragName);
   assignSeat(dragName,sid);dragName=null;
 }
 
@@ -555,6 +623,7 @@ function sc(sid){
     return;
   }
   if(!myName){toast('⚠️ 먼저 본인 이름을 선택하세요');return;}
+  if(excused.has(myName)){excused.delete(myName);assignSeat(myName,sid);return;}
   if(occ===myName){
     if(selectedSrc===sid){selectedSrc=null;refreshChart();toast('↩️ 이동 취소');}
     else{selectedSrc=sid;refreshChart();toast('✋ 이동할 빈 자리를 클릭하세요');}
@@ -593,7 +662,13 @@ function reopenSession(){
   closed=false;document.getElementById('closed-banner').style.display='none';
   renderAll();toast('🔓 재개');pushToFirebase();
 }
-function resetSeats(){if(!confirm('전체 초기화?'))return;seats={};afterChange();toast('🔄 초기화');}
+function resetSeats(){if(!confirm('전체 초기화?'))return;seats={};excused=new Set();afterChange();toast('🔄 초기화');}
+function resetStudent(nm){
+  if(!confirm(`"${nm}" 학생을 리셋할까요?`))return;
+  Object.keys(seats).forEach(s=>{if(seats[s]===nm)delete seats[s];});
+  excused.delete(nm);
+  afterChange();toast(`🔄 "${nm}" 리셋 완료`);
+}
 
 function loadRosterFile(e){
   const file = e.target.files[0];
@@ -634,27 +709,106 @@ function saveRoster(){
   students = parsed;
   document.getElementById('roster-modal').style.display='none';
   afterChange();
+  pushRoster();
   pushToFirebase();
-  toast(`✅ 명단 저장 (${parsed.length}명)`);
+  toast(`✅ 명단 저장 (${parsed.length}명) — 전 회차 적용됨`);
 }
 
 function claimName(){
   const v=document.getElementById('name-dd')?.value;
   if(!v){toast('이름을 선택해 주세요');return;}
   myName=v;selectedSrc=null;
-  toast(`"${v}" 선택 완료 — 빈 자리를 클릭하세요!`);
+  localStorage.setItem(LS_KEY, v);
+  toast(`"${v}" 선택 완료 — 빈 자리를 클릭하거나 결석인정 칸에 드래그하세요!`);
   renderAll();
+}
+
+function buildExcuseHTML(n2s) {
+  const chips = [...excused].map(n => {
+    const canRemove = isAdmin || (!isAdmin && n === myName && !closed);
+    const canDragChip = !closed && (isAdmin || n === myName);
+    return `<span class="excuse-chip" ${canDragChip?`draggable="true" ondragstart="exChipDrag(event,'${n}')"`:''}>${n}${canRemove?`<span class="rm" onclick="removeExcuse('${n}')">✕</span>`:''}</span>`;
+  }).join('');
+  return `<div class="excuse-card">
+    <h3>📋 결석인정 ${isAdmin?'<span style="font-size:11px;color:#999;font-weight:400">(드래그로 추가 / ✕로 제거)</span>':'<span style="font-size:11px;color:#999;font-weight:400">(내 이름을 여기로 드래그)</span>'}</h3>
+    <div class="excuse-drop" id="excuse-drop"
+      ondragover="${!closed?'exOv(event)':'event.preventDefault()'}"
+      ondragleave="exOl(event)"
+      ondrop="${!closed?'exDrop(event)':''}">
+      ${chips||`<span class="excuse-placeholder">이름을 여기로 드래그하세요</span>`}
+    </div>
+  </div>`;
+}
+
+function exOv(e){e.preventDefault();e.currentTarget.classList.add('dragover');}
+function exOl(e){e.currentTarget.classList.remove('dragover');}
+function exChipDrag(e,nm){dragName=nm;e.dataTransfer.effectAllowed='move';}
+function exDrop(e){
+  e.preventDefault();e.currentTarget.classList.remove('dragover');
+  if(!dragName||closed)return;
+  const nm=dragName;dragName=null;
+  if(!isAdmin&&nm!==myName){toast('⚠️ 본인 이름만 결석인정 처리 가능');return;}
+  if(excused.has(nm)){excused.delete(nm);afterChange();toast(`↩️ "${nm}" 결석인정 취소`);return;}
+  Object.keys(seats).forEach(s=>{if(seats[s]===nm)delete seats[s];});
+  excused.add(nm);afterChange();toast(`📋 "${nm}" 결석인정 처리`);
+}
+function removeExcuse(nm){
+  if(!isAdmin&&nm!==myName){toast('⚠️ 본인 것만 취소 가능');return;}
+  excused.delete(nm);afterChange();toast(`↩️ "${nm}" 결석인정 취소`);
+}
+
+// 전체 회차 CSV
+const SESSION_LIST_B119 = [
+  {id:'w1_0907',n:1,date:'2026-09-07'},{id:'w2_0914',n:2,date:'2026-09-14'},
+  {id:'w3_0921',n:3,date:'2026-09-21'},{id:'w4_0928',n:4,date:'2026-09-28'},
+  {id:'w5_1005',n:5,date:'2026-10-05'},{id:'w6_1012',n:6,date:'2026-10-12'},
+  {id:'w7_1019',n:7,date:'2026-10-19'},{id:'w8_1026',n:8,date:'2026-10-26'},
+  {id:'w9_1102',n:9,date:'2026-11-02'},{id:'w10_1109',n:10,date:'2026-11-09'},
+  {id:'w11_1116',n:11,date:'2026-11-16'},{id:'w12_1123',n:12,date:'2026-11-23'},
+  {id:'w13_1130',n:13,date:'2026-11-30'},{id:'w14_1207',n:14,date:'2026-12-07'},
+  {id:'w15_1214',n:15,date:'2026-12-14'},{id:'w16_1221',n:16,date:'2026-12-21'},
+];
+async function exportAllCSV(){
+  toast('📊 전체 회차 불러오는 중...', 5000);
+  const snapshots = await Promise.all(SESSION_LIST_B119.map(s=>db.ref('sessions/'+s.id).once('value')));
+  const activeSessions = snapshots.map((snap,i)=>{
+    const data=snap.val(); if(!data)return null;
+    const s=data.seats||{};const ex=data.excused||[];
+    const n2s={};Object.entries(s).forEach(([sid,nm])=>n2s[nm]=sid);
+    return{...SESSION_LIST_B119[i],n2s,excused:new Set(ex)};
+  }).filter(Boolean);
+  if(!activeSessions.length){toast('⚠️ 저장된 데이터 없음');return;}
+  const hdrs=activeSessions.map(s=>`${s.n}회차(${s.date.slice(5)})`).join(',');
+  let csv='\uFEFF이름,대학,전공,'+hdrs+',총출석,결석인정,결석,출석률\n';
+  students.forEach(s=>{
+    const nm=typeof s==='object'?s.name:s;
+    const college=typeof s==='object'?s.college:'';
+    const major=typeof s==='object'?s.major:'';
+    let att=0,exc=0,abs=0;
+    const cols=activeSessions.map(sess=>{
+      if(sess.excused.has(nm)){exc++;return '결석인정';}
+      else if(sess.n2s[nm]){att++;return '출석';}
+      else{abs++;return '결석';}
+    }).join(',');
+    const rate=activeSessions.length>0?Math.round((att+exc)/activeSessions.length*100):0;
+    csv+=`${nm},${college},${major},${cols},${att},${exc},${abs},${rate}%\n`;
+  });
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download=`AI입문_B119_전체출결_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();toast(`📊 전체 ${activeSessions.length}회차 CSV 저장!`);
 }
 
 function exportCSV(){
   const n2s=getN2S();
-  let csv='\uFEFF이름,대학,전공,착석여부,좌석ID\n';
+  let csv='\uFEFF이름,대학,전공,착석여부,좌석ID,결석인정\n';
   students.forEach(s=>{
-    const nm = typeof s==='object'?s.name:s;
-    const college = typeof s==='object'?s.college:'';
-    const major = typeof s==='object'?s.major:'';
+    const nm=typeof s==='object'?s.name:s;
+    const college=typeof s==='object'?s.college:'';
+    const major=typeof s==='object'?s.major:'';
     const sid=n2s[nm]||'';
-    csv+=`${nm},${college},${major},${sid?'출석':'결석'},${sid}\n`;
+    const ex=excused.has(nm);
+    csv+=`${nm},${college},${major},${ex?'결석인정':(sid?'출석':'결석')},${sid},${ex?'Y':''}\n`;
   });
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
